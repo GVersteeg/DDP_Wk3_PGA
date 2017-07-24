@@ -1,0 +1,151 @@
+---
+title: "DDP-Wk3-PGA1"
+author: "Gerrit Versteeg"
+date: "24 July 2017"
+output: ioslides_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Setup environment
+First let's setup the appropriate libraries:
+
+```{r init, echo=TRUE, warning=FALSE, error=FALSE}
+library("leaflet", warn.conflicts=FALSE)  ## load leaflet silently
+library("tidyr", warn.conflicts=FALSE)     ## load plyr silently
+library("dplyr", warn.conflicts=FALSE)    ## load dplyr silently
+library("ggplot2", warn.conflicts=FALSE)  ## load ggplot2 silently
+```
+
+## Load the data to be visualized (1)
+As an illustration of the use of leaflet in the context of the peer graded assignment for week 2 of the DDP course, we will visualize the levels of air polution. These levels are measured by three measuring stations run by an organization called RIVM. The data for this research is retreived from <https://www.luchtmeetnet.nl/download> by selecting each of the three RIVM stations in The Hague in the Netherlands.
+
+ - Export_AVK.csv (312 kB) - Amsterdamse Veerkade
+ - Export_BL.csv  (353 kB) - Bleriotlaan
+ - Export_RS.csv  (468 kB) - Rebecquestraat
+
+The three files are in Dutch csv-formaat (separator=";" and decimal=","), so we need to use read.csv2. The files are placed in tibbles and merged into one tibble (DF_RIVM). 
+
+## Load the data to be visualized (2)
+```{r loading, echo=TRUE}
+DF_AVK <- tbl_df(read.csv2("./data/Export_AVK.csv"))
+DF_BL <- tbl_df(read.csv2("./data/Export_BL.csv"))
+DF_RS <- tbl_df(read.csv2("./data/Export_RS.csv"))
+DF_RIVM <- bind_rows(DF_AVK, DF_BL, DF_RS)    ## concatenate the data
+```
+
+The 'coercion'-warnings tell us that are is a variation in the levels of the factor variables in the three files. So dplyr coerced the formats to "character".
+
+## What do the stations measure? (1)
+The variable "component" refers to the measured indicators (NO, NO2, O3, PM10 en PM2.5). Let's have a look at what indicators are measured by each of the stations.
+
+```{r EXPcheck, echo=TRUE, warning=FALSE, error=FALSE, comment=""}
+levels(DF_AVK$component)
+levels(DF_BL$component)
+levels(DF_RS$component)
+```
+
+## What do the stations measure? (2)
+All three stations measure NO, NO2 en PM10. 
+
+"Bleriotlaan" also measures O3, while "de Rebecquestraat" measures also O3 and PM2.5. 
+
+For our visualization assignment we will use **only** measurements that occur in all three stations. And we will select a specific measurement period in which all these components were actually measured.
+
+## Extract one equivalent moment (1)
+We need to obtain one measurement in a period for each of the three stations and take only the components that all stations have measured. We first filter the data that is present (similar time and measurement component) for each of the stations.
+
+## Extract one equivalent moment (2)
+```{r dataprep, echo=TRUE, warning=FALSE, error=FALSE}
+gmm <- intersect(levels(DF_AVK$tijdstip),          ## gmm: common
+              intersect(levels(DF_BL$tijdstip),    ## measuring hours
+                levels(DF_RS$tijdstip)))           ## in all stations
+gcp <- intersect(levels(DF_AVK$component),         ## gcp: common
+              intersect(levels(DF_BL$component),   ## indicators in
+                levels(DF_RS$component)))          ## all stations
+DF_prep <- DF_RIVM %>%                             ## Filter DF-RIVM
+        filter(tijdstip %in% gmm) %>%              ## on common dates
+        filter(component %in% gcp) %>%             ## on common ind's
+        mutate(component = as.factor(component)) %>%   ## as factor
+        mutate(location = as.factor(locatie)) %>%  ## as factor
+        mutate(dt = as.POSIXct(strptime(tijdstip,
+                "%Y-%m-%d %H:%M:%S"))) %>%         ## add dt column
+        mutate(date = as.Date(strptime(tijdstip, 
+                "%Y-%m-%d"))) %>%                  ## add date column
+        mutate(time = format(dt, 
+                "%H:%M:%S")) %>%                   ## add time column
+        arrange(desc(date), desc(time))            ## sort on date
+```
+
+## Selecting newyears day
+When we look at the first records of the data, we find that the first days in 2017 contain only PM10 readings, so we will select the measurements during the last hour in 2016, just prior to the 2017 fireworks (for the fun of it). This timeframe is selected by 2017-01-01 00:00. 
+
+```{r datasel, echo=TRUE}
+DF_sel <-                                         ## Create DF_sel
+        DF_prep %>%                               ## Filter DF-prep
+        filter(date == "2017-01-01") %>%          ## on newyear's day
+        filter(time == "00:00:00") %>%            ## on last hour
+        select(location, component, waarde) %>%   ## select columns
+        spread(component, waarde)                 ## long to wide
+```
+
+## The extracted data for 2016'th last hour
+
+```{r showdata, echo=TRUE, comment=""}
+DF_sel
+```
+
+## Adding the geolocation of the stations (1)
+The site of RIVM gives us the geolocation of the three stations. This coordinates are added to the dataset, to enable creating the markers for a map. We first create a lookup table (LUT).
+
+```{r LUT, echo=TRUE, comment=""}
+N <- levels(DF_sel$location)
+Lat <- c("52.0751","52.039","52.0771")
+Lon <- c("4.31587","4.35938","4.28719")
+LUT <-cbind(location=N,lat=as.numeric(Lat),lng=as.numeric(Lon))
+LUT
+```
+
+## Adding the geolocation of the stations (2)
+The Lookup table is used to add the geolocations to the measurements.
+```{r geolocation, echo=TRUE, comment=""}
+ix <- match(DF_sel$location, LUT)   ## create a rowindex into LUT
+DF_tot <- DF_sel %>%
+        mutate(lat = as.numeric(LUT[ix,2])) %>%
+        mutate(lng = as.numeric(LUT[ix,3]))
+```
+
+## The final dataset
+```{r finalset, echo=TRUE, comment=""}
+DF_tot
+```
+
+## The final leaflet
+```{r leaflet, eval=FALSE, echo=TRUE}
+DF_tot %>%
+        leaflet() %>%
+        addTiles() %>%
+        addMarkers(lng = DF_tot$lng, lat = DF_tot$lat,
+                   popup = paste(DF_tot$location, "<br>",
+                                 "NO = ", DF_tot$NO, "<br>",
+                                 "NO2 = ", DF_tot$NO2, "<br>",
+                                 "PM10 = ", DF_tot$PM10))
+```
+
+## The Hague (the Netherlands)
+Created: G. Versteeg (July 23rd, 2017)
+
+Data shown: Air Polution measured by 3 RIVM stations
+
+```{r l2, echo=FALSE, warning=FALSE, error=FALSE}
+DF_tot %>%
+        leaflet() %>%
+        addTiles() %>%
+        addMarkers(lng = DF_tot$lng, lat = DF_tot$lat,
+                   popup = paste(DF_tot$location, "<br>",
+                                 "NO = ", DF_tot$NO, "<br>",
+                                 "NO2 = ", DF_tot$NO2, "<br>",
+                                 "PM10 = ", DF_tot$PM10))
+```
